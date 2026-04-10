@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Passeio do Cavalo</title>
+    <style>
+      :root {
+        --size: min(88vw, 720px);
+        --cell: calc(var(--size) / 8);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        padding: 24px;
+      }
+
+      .app {
+        width: min(960px, 100%);
+        display: grid;
+        gap: 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.2rem, 2vw, 1.8rem);
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: none;
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        background: #2563eb;
+        color: #fff;
+      }
+
+      button:hover {
+        filter: brightness(1.08);
+      }
+
+      #status {
+        font-size: 0.95rem;
+        color: #cbd5e1;
+      }
+
+      .board-wrap {
+        position: relative;
+        width: var(--size);
+        height: var(--size);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+      }
+
+      #board {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        grid-template-rows: repeat(8, 1fr);
+      }
+
+      .square {
+        transition: opacity 220ms ease;
+      }
+
+      .light {
+        background: #f8fafc;
+      }
+
+      .dark {
+        background: #334155;
+      }
+
+      .vanished {
+        opacity: 0;
+      }
+
+      #trace {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      #trace polyline {
+        fill: none;
+        stroke: #38bdf8;
+        stroke-width: 4;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+        filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.6));
+      }
+
+      #knight {
+        position: absolute;
+        width: var(--cell);
+        height: var(--cell);
+        display: grid;
+        place-items: center;
+        font-size: calc(var(--cell) * 0.62);
+        color: #f59e0b;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        transform: translate(0, 0);
+        transition: transform 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .hint {
+        margin: 0;
+        color: #94a3b8;
+        font-size: 0.88rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <h1>Passeio do cavalo (xadrez)</h1>
+      <div class="toolbar">
+        <button id="startBtn">Iniciar passeio</button>
+        <button id="resetBtn">Reiniciar</button>
+        <span id="status">Pronto para começar.</span>
+      </div>
+
+      <section class="board-wrap" aria-label="Tabuleiro de xadrez animado">
+        <div id="board"></div>
+        <svg id="trace" viewBox="0 0 800 800" preserveAspectRatio="none">
+          <polyline id="pathLine" points=""></polyline>
+        </svg>
+        <div id="knight" aria-label="Cavalo">♞</div>
+      </section>
+
+      <p class="hint">
+        Regra da animação: o cavalo passa por todas as 64 casas, as casas já visitadas
+        somem e o traçado mostra todo o caminho.
+      </p>
+    </main>
+
+    <script>
+      const SIZE = 8;
+      const MOVES = [
+        [2, 1],
+        [1, 2],
+        [-1, 2],
+        [-2, 1],
+        [-2, -1],
+        [-1, -2],
+        [1, -2],
+        [2, -1],
+      ];
+
+      const boardEl = document.getElementById("board");
+      const knightEl = document.getElementById("knight");
+      const pathLineEl = document.getElementById("pathLine");
+      const statusEl = document.getElementById("status");
+      const startBtn = document.getElementById("startBtn");
+      const resetBtn = document.getElementById("resetBtn");
+
+      const squares = [];
+      let running = false;
+
+      function squareId(x, y) {
+        return y * SIZE + x;
+      }
+
+      function inBounds(x, y) {
+        return x >= 0 && x < SIZE && y >= 0 && y < SIZE;
+      }
+
+      function centerPoint([x, y]) {
+        const unit = 800 / SIZE;
+        return `${x * unit + unit / 2},${y * unit + unit / 2}`;
+      }
+
+      function createBoard() {
+        boardEl.innerHTML = "";
+        squares.length = 0;
+
+        for (let y = 0; y < SIZE; y++) {
+          for (let x = 0; x < SIZE; x++) {
+            const sq = document.createElement("div");
+            sq.className = `square ${(x + y) % 2 === 0 ? "light" : "dark"}`;
+            sq.dataset.x = x;
+            sq.dataset.y = y;
+            boardEl.appendChild(sq);
+            squares.push(sq);
+          }
+        }
+      }
+
+      function getCandidates(x, y, visited) {
+        const next = [];
+
+        for (const [dx, dy] of MOVES) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (inBounds(nx, ny) && !visited[ny][nx]) {
+            next.push([nx, ny]);
+          }
+        }
+
+        next.sort((a, b) => {
+          const degreeA = onwardMoves(a[0], a[1], visited);
+          const degreeB = onwardMoves(b[0], b[1], visited);
+          return degreeA - degreeB;
+        });
+
+        return next;
+      }
+
+      function onwardMoves(x, y, visited) {
+        let total = 0;
+        for (const [dx, dy] of MOVES) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (inBounds(nx, ny) && !visited[ny][nx]) {
+            total++;
+          }
+        }
+        return total;
+      }
+
+      function findKnightTour(startX = 0, startY = 0) {
+        const visited = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
+        const path = [];
+
+        function backtrack(x, y, step) {
+          visited[y][x] = true;
+          path.push([x, y]);
+
+          if (step === SIZE * SIZE) {
+            return true;
+          }
+
+          const candidates = getCandidates(x, y, visited);
+          for (const [nx, ny] of candidates) {
+            if (backtrack(nx, ny, step + 1)) {
+              return true;
+            }
+          }
+
+          visited[y][x] = false;
+          path.pop();
+          return false;
+        }
+
+        return backtrack(startX, startY, 1) ? path : null;
+      }
+
+      function clearVisualState() {
+        squares.forEach((sq) => sq.classList.remove("vanished"));
+        pathLineEl.setAttribute("points", "");
+        knightEl.style.transform = "translate(0px, 0px)";
+      }
+
+      function placeKnight([x, y]) {
+        const cell = boardEl.clientWidth / SIZE;
+        knightEl.style.transform = `translate(${x * cell}px, ${y * cell}px)`;
+      }
+
+      async function animateTour(path) {
+        running = true;
+        startBtn.disabled = true;
+        statusEl.textContent = "Passeio em andamento...";
+
+        const points = [];
+
+        for (let i = 0; i < path.length; i++) {
+          const [x, y] = path[i];
+          placeKnight([x, y]);
+
+          points.push(centerPoint([x, y]));
+          pathLineEl.setAttribute("points", points.join(" "));
+
+          const sq = squares[squareId(x, y)];
+          sq.classList.add("vanished");
+
+          statusEl.textContent = `Passo ${i + 1} de ${path.length}`;
+          await new Promise((resolve) => setTimeout(resolve, 280));
+        }
+
+        statusEl.textContent = "Concluído! O cavalo visitou todas as casas.";
+        running = false;
+        startBtn.disabled = false;
+      }
+
+      async function startTour() {
+        if (running) return;
+
+        clearVisualState();
+
+        let path = null;
+        const starts = [
+          [0, 0],
+          [1, 1],
+          [2, 2],
+          [3, 3],
+          [0, 7],
+          [7, 0],
+        ];
+
+        for (const [sx, sy] of starts) {
+          path = findKnightTour(sx, sy);
+          if (path) break;
+        }
+
+        if (!path) {
+          statusEl.textContent = "Não foi possível encontrar um passeio completo.";
+          return;
+        }
+
+        await animateTour(path);
+      }
+
+      function resetTour() {
+        if (running) return;
+        clearVisualState();
+        statusEl.textContent = "Tabuleiro reiniciado.";
+      }
+
+      window.addEventListener("resize", () => {
+        if (!running) {
+          const points = pathLineEl.getAttribute("points");
+          if (points) {
+            statusEl.textContent = "Reinicie para recalcular o traçado com o novo tamanho.";
+          }
+        }
+      });
+
+      startBtn.addEventListener("click", startTour);
+      resetBtn.addEventListener("click", resetTour);
+
+      createBoard();
+      resetTour();
+    </script>
+  </body>
+</html>
