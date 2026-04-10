@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Passeio do Cavalo</title>
+  <style>
+    :root {
+      --size: min(88vmin, 680px);
+      --cell: calc(var(--size) / 8);
+      --light: #f0d9b5;
+      --dark: #b58863;
+      --bg: #161616;
+      --path: #00d4ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at top, #2b2b2b, var(--bg));
+      color: #fff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      padding: 24px;
+      gap: 16px;
+    }
+
+    .panel {
+      text-align: center;
+      display: grid;
+      gap: 10px;
+      justify-items: center;
+    }
+
+    .board-wrap {
+      width: var(--size);
+      height: var(--size);
+      position: relative;
+      border: 4px solid #222;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 15px 40px rgba(0,0,0,.4);
+    }
+
+    .board {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      grid-template-rows: repeat(8, 1fr);
+    }
+
+    .cell {
+      position: relative;
+      transition: opacity .35s ease;
+    }
+
+    .cell.light { background: var(--light); }
+    .cell.dark { background: var(--dark); }
+
+    .cell.vanished {
+      opacity: 0;
+    }
+
+    .knight {
+      position: absolute;
+      width: var(--cell);
+      height: var(--cell);
+      display: grid;
+      place-items: center;
+      font-size: calc(var(--cell) * 0.62);
+      z-index: 4;
+      transition: transform .35s ease;
+      text-shadow: 0 2px 10px rgba(0,0,0,.45);
+      pointer-events: none;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,.55));
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    button {
+      border: none;
+      padding: 10px 18px;
+      border-radius: 999px;
+      background: #ffffff;
+      color: #111;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+
+    .status {
+      opacity: .95;
+      font-size: .95rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>Passeio do Cavalo</h1>
+    <p class="status" id="status">Clique em “Reiniciar” para gerar um novo trajeto.</p>
+    <button id="reset">Reiniciar</button>
+  </div>
+
+  <div class="board-wrap" id="wrap">
+    <div class="board" id="board"></div>
+    <canvas id="path"></canvas>
+    <div class="knight" id="knight" aria-label="Cavalo">♞</div>
+  </div>
+
+  <script>
+    const SIZE = 8;
+    const board = document.getElementById('board');
+    const knightEl = document.getElementById('knight');
+    const statusEl = document.getElementById('status');
+    const resetBtn = document.getElementById('reset');
+    const canvas = document.getElementById('path');
+    const ctx = canvas.getContext('2d');
+
+    const moves = [
+      [2, 1], [1, 2], [-1, 2], [-2, 1],
+      [-2, -1], [-1, -2], [1, -2], [2, -1]
+    ];
+
+    let cells = [];
+    let tour = [];
+    let points = [];
+    let stepIndex = 0;
+    let timer;
+
+    function makeBoard() {
+      board.innerHTML = '';
+      cells = [];
+      for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+          const cell = document.createElement('div');
+          cell.className = `cell ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
+          cell.dataset.row = r;
+          cell.dataset.col = c;
+          cells.push(cell);
+          board.appendChild(cell);
+        }
+      }
+    }
+
+    function resizeCanvas() {
+      const rect = board.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = rect.height * devicePixelRatio;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      redrawPath();
+    }
+
+    function idx(r, c) {
+      return r * SIZE + c;
+    }
+
+    function inside(r, c) {
+      return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
+    }
+
+    function degree(r, c, visited) {
+      let count = 0;
+      for (const [dr, dc] of moves) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (inside(nr, nc) && !visited[idx(nr, nc)]) count++;
+      }
+      return count;
+    }
+
+    function buildTour() {
+      const visited = new Array(SIZE * SIZE).fill(false);
+      let r = Math.floor(Math.random() * SIZE);
+      let c = Math.floor(Math.random() * SIZE);
+      const path = [[r, c]];
+      visited[idx(r, c)] = true;
+
+      for (let i = 1; i < SIZE * SIZE; i++) {
+        const options = [];
+        for (const [dr, dc] of moves) {
+          const nr = r + dr;
+          const nc = c + dc;
+          if (!inside(nr, nc) || visited[idx(nr, nc)]) continue;
+          options.push([nr, nc, degree(nr, nc, visited)]);
+        }
+
+        if (!options.length) return null;
+        options.sort((a, b) => a[2] - b[2] || Math.random() - 0.5);
+
+        [r, c] = options[0];
+        visited[idx(r, c)] = true;
+        path.push([r, c]);
+      }
+      return path;
+    }
+
+    function generateTour(maxTries = 120) {
+      for (let t = 0; t < maxTries; t++) {
+        const result = buildTour();
+        if (result) return result;
+      }
+      return null;
+    }
+
+    function cellCenter(r, c) {
+      const cell = cells[idx(r, c)].getBoundingClientRect();
+      const base = board.getBoundingClientRect();
+      return {
+        x: cell.left - base.left + cell.width / 2,
+        y: cell.top - base.top + cell.height / 2,
+        cellX: cell.left - base.left,
+        cellY: cell.top - base.top
+      };
+    }
+
+    function moveKnight(r, c) {
+      const { cellX, cellY } = cellCenter(r, c);
+      knightEl.style.transform = `translate(${cellX}px, ${cellY}px)`;
+    }
+
+    function redrawPath() {
+      const rect = board.getBoundingClientRect();
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      if (!points.length) return;
+
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--path').trim();
+      ctx.lineWidth = Math.max(2, rect.width / 180);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = 'rgba(0, 212, 255, 0.5)';
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    function clearState() {
+      clearInterval(timer);
+      stepIndex = 0;
+      points = [];
+      for (const cell of cells) cell.classList.remove('vanished');
+      redrawPath();
+    }
+
+    function animateTour() {
+      clearState();
+      if (!tour) {
+        statusEl.textContent = 'Não consegui gerar um tour completo agora. Tente reiniciar.';
+        return;
+      }
+
+      statusEl.textContent = 'Cavalo caminhando...';
+      const [sr, sc] = tour[0];
+      moveKnight(sr, sc);
+
+      timer = setInterval(() => {
+        const [r, c] = tour[stepIndex];
+
+        if (stepIndex > 0) {
+          const [pr, pc] = tour[stepIndex - 1];
+          cells[idx(pr, pc)].classList.add('vanished');
+        }
+
+        moveKnight(r, c);
+        points.push(cellCenter(r, c));
+        redrawPath();
+
+        stepIndex++;
+        if (stepIndex >= tour.length) {
+          clearInterval(timer);
+          statusEl.textContent = 'Tour completo! O cavalo visitou todas as 64 casas.';
+        }
+      }, 380);
+    }
+
+    function start() {
+      tour = generateTour();
+      animateTour();
+    }
+
+    resetBtn.addEventListener('click', start);
+    window.addEventListener('resize', () => {
+      resizeCanvas();
+      if (stepIndex > 0 && tour && stepIndex <= tour.length) {
+        const [r, c] = tour[Math.max(0, stepIndex - 1)];
+        moveKnight(r, c);
+        points = tour.slice(0, stepIndex).map(([tr, tc]) => cellCenter(tr, tc));
+        redrawPath();
+      }
+    });
+
+    makeBoard();
+    resizeCanvas();
+    start();
+  </script>
+</body>
+</html>
